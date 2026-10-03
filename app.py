@@ -12,6 +12,7 @@ class CompanionApp:
         self.companion = Companion()
         self.pending = []
         self.generating = False
+        self.response_task = None
 
         self.chat = scrolledtext.ScrolledText(root, wrap=tk.WORD, state='disabled')
         self.chat.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
@@ -43,10 +44,11 @@ class CompanionApp:
             return
         self.entry.delete(0, tk.END)
         self.write('You', text)
-        self.pending.append(text)
-        self.status.configure(text='Thinking...' if self.generating else 'Queued')
-        if not self.generating:
-            self.loop.create_task(self.respond_next())
+        if self.generating and self.response_task:
+            self.response_task.cancel()
+        self.pending = [text]
+        self.status.configure(text='Interrupting...')
+        self.response_task = self.loop.create_task(self.respond_next())
 
     async def respond_next(self):
         if self.generating or not self.pending:
@@ -55,8 +57,14 @@ class CompanionApp:
         text = self.pending.pop(0)
         try:
             self.status.configure(text='Thinking...')
-            answer = await self.companion.respond(text)
-            self.root.after(0, lambda: self.write(self.companion.name, answer))
+            self.root.after(0, lambda: self.write(self.companion.name, ''))
+            buffer = ''
+            async for piece in self.companion.respond_stream(text):
+                buffer += piece
+                self.root.after(0, lambda value=buffer: self.replace_last(value))
+                await asyncio.sleep(0.01)
+        except asyncio.CancelledError:
+            pass
         except Exception as exc:
             self.root.after(0, lambda: self.write('Error', str(exc)))
         finally:
@@ -65,6 +73,16 @@ class CompanionApp:
                 self.loop.create_task(self.respond_next())
             else:
                 self.root.after(0, lambda: self.status.configure(text='Ready'))
+
+    def replace_last(self, value):
+        self.chat.configure(state='normal')
+        end = self.chat.index('end-1c')
+        start = self.chat.search(self.companion.name + ': ', '1.0', backwards=True, stopindex=end)
+        if start:
+            self.chat.delete(start, end)
+            self.chat.insert(tk.END, self.companion.name + ': ' + value + '\n\n')
+        self.chat.configure(state='disabled')
+        self.chat.see(tk.END)
 
     async def proactive_loop(self):
         async def emit(message):
