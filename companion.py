@@ -50,10 +50,10 @@ Current state:
         messages += [{'role': x['role'], 'content': x['content']} for x in recent]
         messages.append({'role': 'user', 'content': text})
         self.memory.add_message('user', text)
-        result = await self.client.chat(model=self.model, messages=messages, options={'temperature': 1.05}, stream=True)
-        answer = ''
         try:
-            async for chunk in result:
+            stream = await self.client.chat(model=self.model, messages=messages, options={'temperature': 1.05}, stream=True)
+            answer = ''
+            async for chunk in stream:
                 piece = chunk.message.content or ''
                 if piece:
                     answer += piece
@@ -62,8 +62,11 @@ Current state:
             if answer.strip():
                 self.memory.add_message('assistant', answer.strip())
             raise
+        except Exception as exc:
+            raise RuntimeError(f'Ollama error: {exc}') from exc
         answer = answer.strip()
-        self.memory.add_message('assistant', answer)
+        if answer:
+            self.memory.add_message('assistant', answer)
         self.state.update(text)
         await self.extract_memory(text, answer)
 
