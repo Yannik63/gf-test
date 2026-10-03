@@ -98,6 +98,23 @@ class CompanionApp:
 
     def generate(self, generation_id, text, stop_event):
         try:
+            # Give longer replies a little more "thinking/typing" time.
+            # Keep the delay randomized so it does not feel like a fixed timer.
+            import random
+            word_count = len(text.split())
+            if word_count <= 4:
+                delay = random.uniform(0.6, 1.1)
+            elif word_count <= 12:
+                delay = random.uniform(1.0, 1.7)
+            elif word_count <= 25:
+                delay = random.uniform(1.6, 2.5)
+            else:
+                delay = random.uniform(2.4, 4.0)
+
+            if stop_event.wait(delay):
+                self.events.put(('done', generation_id, None))
+                return
+
             self.events.put(('begin', generation_id, None))
             for piece in self.companion.respond_stream_sync(text, stop_event):
                 self.events.put(('piece', generation_id, piece))
