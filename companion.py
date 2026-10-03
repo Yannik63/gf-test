@@ -1,3 +1,4 @@
+import asyncio
 import json
 import os
 from dotenv import load_dotenv
@@ -37,18 +38,34 @@ Current state:
 {json.dumps(self.state.snapshot())}'''
 
     async def respond(self, text):
+        answer = ''
+        async for chunk in self.respond_stream(text):
+            answer += chunk
+        return answer.strip()
+
+    async def respond_stream(self, text):
         recent = self.memory.recent(16)
         memories = self.memory.search(text, 10)
         messages = [{'role': 'system', 'content': self.system_prompt(memories)}]
         messages += [{'role': x['role'], 'content': x['content']} for x in recent]
         messages.append({'role': 'user', 'content': text})
         self.memory.add_message('user', text)
-        result = await self.client.chat(model=self.model, messages=messages, options={'temperature': 1.05})
-        answer = (result.message.content or '').strip()
+        result = await self.client.chat(model=self.model, messages=messages, options={'temperature': 1.05}, stream=True)
+        answer = ''
+        try:
+            async for chunk in result:
+                piece = chunk.message.content or ''
+                if piece:
+                    answer += piece
+                    yield piece
+        except asyncio.CancelledError:
+            if answer.strip():
+                self.memory.add_message('assistant', answer.strip())
+            raise
+        answer = answer.strip()
         self.memory.add_message('assistant', answer)
         self.state.update(text)
         await self.extract_memory(text, answer)
-        return answer
 
     async def extract_memory(self, user_text, answer):
         prompt = f'''Extract only durable information from the USER message.
