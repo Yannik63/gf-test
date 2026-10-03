@@ -22,6 +22,7 @@ class CompanionApp:
         self.stop_event = None
         self.response_mark = None
         self.response_prefix_buffer = ''
+        self.response_started = False
         self.generating = False
 
         self.mode = self.companion.memory.get_state('interface_mode', 'modern')
@@ -254,7 +255,8 @@ class CompanionApp:
         if generation_id != self.generation_id:
             return
         self.response_prefix_buffer = ''
-        self.chat.configure(state='normal')
+        self.response_started = False
+        self.chat.configure(state='normal'
         self.chat.insert(tk.END, f'{self.companion.name}: ', 'mia')
         self.response_mark = self.chat.index('end-1c')
         self.chat.mark_set('response', self.response_mark)
@@ -263,28 +265,29 @@ class CompanionApp:
         self.chat.see(tk.END)
 
     def _clean_response_prefix(self, value):
-        """Strip one or more leading Mia: labels emitted by the model.
+        """Remove only leading speaker labels without touching normal spaces."""
+        if self.response_started:
+            return value
 
-        The UI already renders the speaker label. Keep this only at the very
-        start of a streamed response so a legitimate later use of "Mia:" is
-        left untouched.
-        """
         self.response_prefix_buffer += value
-        candidate = self.response_prefix_buffer.lstrip()
+        candidate = self.response_prefix_buffer
         prefix = self.companion.name + ':'
 
-        # Wait briefly if the current chunk could still be the beginning of
-        # a split speaker label (e.g. "M" + "ia: hello").
-        if len(candidate) < len(prefix) and prefix.lower().startswith(candidate.lower()):
+        # Only inspect whitespace at the very beginning of the response.
+        stripped = candidate.lstrip()
+        leading_ws = candidate[:len(candidate) - len(stripped)]
+
+        if len(stripped) < len(prefix) and prefix.lower().startswith(stripped.lower()):
             return ''
 
-        # Models occasionally emit the speaker label twice. Remove all
-        # consecutive leading copies before releasing the buffered text.
-        while candidate.lower().startswith(prefix.lower()):
-            candidate = candidate[len(prefix):].lstrip()
+        while stripped.lower().startswith(prefix.lower()):
+            stripped = stripped[len(prefix):]
+            stripped = stripped.lstrip()
 
         self.response_prefix_buffer = ''
-        return candidate
+        self.response_started = True
+        # The prefix-cleanup is finished; preserve all subsequent model spacing.
+        return stripped
 
     def append_response(self, generation_id, value):
         if generation_id != self.generation_id or not self.response_mark:
