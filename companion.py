@@ -42,7 +42,6 @@ Current state:
         return messages
 
     def respond_stream_sync(self, text, stop_event=None):
-        # Add the current user turn only after building context, so it is not duplicated.
         messages = self._messages(text)
         self.memory.add_message('user', text)
         answer = ''
@@ -50,6 +49,7 @@ Current state:
             stream = self.client.chat(
                 model=self.model,
                 messages=messages,
+                think=False,
                 options={
                     'temperature': 1.05,
                     'num_ctx': 8192,
