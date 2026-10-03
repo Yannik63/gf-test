@@ -20,6 +20,7 @@ class CompanionApp:
         self.worker = None
         self.stop_event = None
         self.response_mark = None
+        self.response_prefix_buffer = ''
         self.generating = False
 
         self.mode = self.companion.memory.get_state('interface_mode', 'modern')
@@ -120,10 +121,11 @@ class CompanionApp:
             font=('TkDefaultFont', 12, 'bold')
         )
         self.settings_button.configure(
+            text='Settings',
             bg=bg,
-            fg='black',
-            activebackground=bg,
-            activeforeground='black',
+            fg='#202020',
+            activebackground='#e6e6e6',
+            activeforeground='#202020',
             font=('TkDefaultFont', 9)
         )
         self.chat.configure(
@@ -176,6 +178,7 @@ class CompanionApp:
             font=('Segoe UI', 16, 'bold')
         )
         self.settings_button.configure(
+            text='⚙  Settings',
             bg=bg,
             fg=muted,
             activebackground=bg,
@@ -249,6 +252,7 @@ class CompanionApp:
     def begin_response(self, generation_id):
         if generation_id != self.generation_id:
             return
+        self.response_prefix_buffer = ''
         self.chat.configure(state='normal')
         self.chat.insert(tk.END, f'{self.companion.name}: ', 'mia')
         self.response_mark = self.chat.index('end-1c')
@@ -261,14 +265,9 @@ class CompanionApp:
         if generation_id != self.generation_id or not self.response_mark:
             return
 
-        # The UI already writes "Mia:". Qwen occasionally repeats the speaker
-        # label itself, so remove only a leading standalone label.
-        if self.response_mark == self.chat.index('end-1c'):
-            cleaned = value.lstrip()
-            if cleaned.lower().startswith('mia:'):
-                value = cleaned[4:].lstrip()
-            elif cleaned.lower().startswith(self.companion.name.lower() + ':'):
-                value = cleaned[len(self.companion.name) + 1:].lstrip()
+        # The UI already writes "Mia:". Streaming may split a repeated
+        # speaker label across multiple chunks, so clean it before display.
+        value = self._clean_response_prefix(value)
 
         if value:
             self.chat.configure(state='normal')
@@ -297,12 +296,14 @@ class CompanionApp:
         window.transient(self.root)
         window.grab_set()
 
-        bg = '#17191d' if self.mode == 'modern' else self.root.cget('bg')
-        fg = '#e7e9ed' if self.mode == 'modern' else 'black'
+        bg = '#17191d' if self.mode == 'modern' else 'white'
+        fg = '#e7e9ed' if self.mode == 'modern' else '#202020'
         muted = '#9298a3' if self.mode == 'modern' else '#555555'
-        panel = '#202329' if self.mode == 'modern' else 'white'
+        panel = '#202329' if self.mode == 'modern' else '#ffffff'
 
         window.configure(bg=bg)
+        window.protocol('WM_DELETE_WINDOW', lambda: (window.grab_release(), window.destroy()))
+        window.bind('<Escape>', lambda event: (window.grab_release(), window.destroy()))
 
         tk.Label(
             window,
@@ -340,7 +341,8 @@ class CompanionApp:
                 activebackground=bg,
                 activeforeground=fg,
                 selectcolor=panel,
-                highlightthickness=0
+                highlightthickness=0,
+                disabledforeground=fg
             ).pack(side=tk.LEFT, padx=(0, 16), pady=(6, 12))
 
         tk.Label(
@@ -375,6 +377,10 @@ class CompanionApp:
         font_menu.pack(anchor='w', padx=22, pady=(5, 18))
 
         def save():
+            try:
+                window.grab_release()
+            except tk.TclError:
+                pass
             self.mode = mode_var.get()
             self.font_size = int(font_var.get())
             self.companion.memory.set_state('interface_mode', self.mode)
@@ -404,7 +410,7 @@ class CompanionApp:
         tk.Button(
             window,
             text='Cancel',
-            command=window.destroy,
+            command=lambda: (window.grab_release(), window.destroy()),
             bg=button_bg,
             fg=fg,
             activebackground=button_active,
