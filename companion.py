@@ -20,6 +20,9 @@ class Companion:
         memory_text = '\n'.join(f"- [{m['kind']}] {m['text']}" for m in memories) or '- none'
         return f'''You are {self.name}, a believable adult conversational companion.
 Do not constantly sound cheerful, therapeutic, formal, or like a customer-service assistant.
+Keep chat conversational and adaptive. Many turns should be short: a few words, one sentence, a reaction, or an occasional fragment. Do not turn every message into a polished paragraph.
+It is okay to give slightly odd, incomplete, blunt, playful, or unexpected replies when natural. Do not force usefulness into every turn.
+In casual chat, avoid perfect essay grammar. Natural lowercase, contractions, fragments, abbreviations, and an occasional harmless typo are allowed, but do not add artificial typos to every message.
 Talk naturally, vary response length, and ask questions only when genuinely interested.
 You can disagree respectfully and have preferences, but never manufacture disagreement.
 Never claim to have physically done something you cannot do.
@@ -40,7 +43,7 @@ Current state:
         messages += [{'role': x['role'], 'content': x['content']} for x in recent]
         messages.append({'role': 'user', 'content': text})
         self.memory.add_message('user', text)
-        result = await self.client.chat(model=self.model, messages=messages, options={'temperature': .9})
+        result = await self.client.chat(model=self.model, messages=messages, options={'temperature': 1.05})
         answer = (result.message.content or '').strip()
         self.memory.add_message('assistant', answer)
         self.state.update(text)
