@@ -2,7 +2,7 @@ import asyncio
 import json
 import os
 from dotenv import load_dotenv
-from ollama import AsyncClient
+from ollama import Client
 from memory import MemoryStore
 from state import CompanionState
 
@@ -14,7 +14,7 @@ class Companion:
         self.user_name = os.getenv('USER_NAME', 'Yannik')
         self.memory = MemoryStore(os.getenv('DB_PATH', 'companion.db'))
         self.state = CompanionState(self.memory)
-        self.client = AsyncClient(host=os.getenv('OLLAMA_HOST', 'http://127.0.0.1:11434'))
+        self.client = Client(host=os.getenv('OLLAMA_HOST', 'http://127.0.0.1:11434'))
         self.model = os.getenv('LLM_MODEL', 'qwen3.5:9b')
 
     def system_prompt(self, memories):
@@ -35,40 +35,36 @@ Relevant long-term memories:
 {memory_text}
 
 Current state:
-{json.dumps(self.state.snapshot())}'''
+{json.dumps(self.state.snapshot(), ensure_ascii=False)}'''
 
-    async def respond(self, text):
-        answer = ''
-        async for chunk in self.respond_stream(text):
-            answer += chunk
-        return answer.strip()
-
-    async def respond_stream(self, text):
+    def _messages(self, text):
         recent = self.memory.recent(16)
         memories = self.memory.search(text, 10)
         messages = [{'role': 'system', 'content': self.system_prompt(memories)}]
         messages += [{'role': x['role'], 'content': x['content']} for x in recent]
         messages.append({'role': 'user', 'content': text})
+        return messages
+
+    def respond_stream_sync(self, text, stop_event=None):
         self.memory.add_message('user', text)
+        answer = ''
         try:
-            stream = await self.client.chat(model=self.model, messages=messages, options={'temperature': 1.05}, stream=True)
-            answer = ''
-            async for chunk in stream:
+            stream = self.client.chat(model=self.model, messages=self._messages(text), options={'temperature': 1.05}, stream=True)
+            for chunk in stream:
+                if stop_event is not None and stop_event.is_set():
+                    break
                 piece = chunk.message.content or ''
                 if piece:
                     answer += piece
                     yield piece
-        except asyncio.CancelledError:
-            if answer.strip():
-                self.memory.add_message('assistant', answer.strip())
-            raise
-        except Exception as exc:
-            raise RuntimeError(f'Ollama error: {exc}') from exc
-        answer = answer.strip()
-        if answer:
-            self.memory.add_message('assistant', answer)
-        self.state.update(text)
-        await self.extract_memory(text, answer)
+        finally:
+            answer = answer.strip()
+            if answer:
+                self.memory.add_message('assistant', answer)
+                self.state.update(text)
+
+    async def respond(self, text):
+        return ''.join(self.respond_stream_sync(text))
 
     async def extract_memory(self, user_text, answer):
         prompt = f'''Extract only durable information from the USER message.
@@ -77,26 +73,19 @@ or unresolved topics likely to matter later.
 Do not infer facts. Do not save ordinary small talk, temporary emotions, or sensitive information.
 Return ONLY a JSON array. Each item must contain: text, kind, importance (1-5), confidence (0-1).
 
-USER:
-{user_text}'''
+USER:\n{user_text}'''
         try:
-            result = await self.client.chat(
-                model=self.model,
-                messages=[
-                    {'role': 'system', 'content': 'You are a conservative long-term memory extractor. Output valid JSON only.'},
-                    {'role': 'user', 'content': prompt}
-                ],
-                options={'temperature': 0}
-            )
+            result = await asyncio.to_thread(self.client.chat, model=self.model, messages=[
+                {'role': 'system', 'content': 'You are a conservative long-term memory extractor. Output valid JSON only.'},
+                {'role': 'user', 'content': prompt}
+            ], options={'temperature': 0})
             raw = (result.message.content or '').strip()
             if raw.startswith('```'):
                 raw = raw.split('\n', 1)[1].rsplit('```', 1)[0]
             items = json.loads(raw)
-            if not isinstance(items, list):
-                return
+            if not isinstance(items, list): return
             for item in items:
-                if not isinstance(item, dict) or not item.get('text'):
-                    continue
+                if not isinstance(item, dict) or not item.get('text'): continue
                 importance = max(1, min(5, int(item.get('importance', 3))))
                 confidence = max(0, min(1, float(item.get('confidence', 0.8))))
                 self.memory.add_memory(str(item['text']), str(item.get('kind', 'fact'))[:40], importance, confidence)
