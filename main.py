@@ -1,8 +1,13 @@
 import asyncio
 from companion import Companion
+from scheduler import ProactiveScheduler
 
 async def main():
     companion = Companion()
+    scheduler = ProactiveScheduler(companion, interval_seconds=60)
+    async def emit(message):
+        print(f'\n{companion.name}: {message}\nYou: ', end='', flush=True)
+    scheduler_task = asyncio.create_task(scheduler.run(lambda message: asyncio.create_task(emit(message))))
     print(f'{companion.name}: I\'m here. Type /help for commands.')
     while True:
         try:
@@ -13,6 +18,8 @@ async def main():
         if not user:
             continue
         if user == '/quit':
+            scheduler.stop()
+            scheduler_task.cancel()
             break
         if user == '/help':
             print('/memory - show saved memories')
