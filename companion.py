@@ -12,7 +12,7 @@ class Companion:
         self.name = os.getenv('COMPANION_NAME', 'Alex')
         self.user_name = os.getenv('USER_NAME', 'Yannik')
         self.memory = MemoryStore(os.getenv('DB_PATH', 'companion.db'))
-        self.state = CompanionState()
+        self.state = CompanionState(self.memory)
         self.client = AsyncClient(host=os.getenv('OLLAMA_HOST', 'http://127.0.0.1:11434'))
         self.model = os.getenv('LLM_MODEL', 'qwen3.5:9b')
 
