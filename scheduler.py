@@ -44,7 +44,8 @@ Return ONLY JSON: {"initiate": true/false, "message": "..."}'''
                     {'role': 'system', 'content': prompt},
                     {'role': 'user', 'content': json.dumps(context, ensure_ascii=False)}
                 ],
-                options={'temperature': .8}
+                think=False,
+                options={'temperature': .8, 'num_predict': 64}
             )
             raw = (result.message.content or '').strip()
             if raw.startswith('```'):
