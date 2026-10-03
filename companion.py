@@ -17,7 +17,7 @@ class Companion:
         self.model = os.getenv('LLM_MODEL', 'gpt-5.6')
 
     def system_prompt(self, memories):
-        memory_text = '\n'.join(f"- {m['text']}" for m in memories) or '- none'
+        memory_text = '\n'.join(f"- [{m['kind']}] {m['text']}" for m in memories) or '- none'
         return f'''You are {self.name}, a believable adult conversational companion.
 Do not constantly sound cheerful, therapeutic, formal, or like a customer-service assistant.
 Talk naturally, vary response length, and ask questions only when genuinely interested.
@@ -34,14 +34,48 @@ Current state:
 {json.dumps(self.state.snapshot())}'''
 
     async def respond(self, text):
-        recent = self.memory.recent(12)
-        memories = self.memory.search(text, 8)
+        recent = self.memory.recent(16)
+        memories = self.memory.search(text, 10)
         messages = [{'role': 'system', 'content': self.system_prompt(memories)}]
         messages += [{'role': x['role'], 'content': x['content']} for x in recent]
         messages.append({'role': 'user', 'content': text})
         self.memory.add_message('user', text)
         result = await self.client.chat.completions.create(model=self.model, messages=messages, temperature=.9)
-        answer = result.choices[0].message.content.strip()
+        answer = (result.choices[0].message.content or '').strip()
         self.memory.add_message('assistant', answer)
         self.state.update(text)
+        await self.extract_memory(text, answer)
         return answer
+
+    async def extract_memory(self, user_text, answer):
+        prompt = f'''Extract only durable information from the USER message.
+Save stable preferences, recurring interests, important personal facts, meaningful plans,
+or unresolved topics likely to matter later.
+Do not infer facts. Do not save ordinary small talk, temporary emotions, or sensitive information.
+Return ONLY a JSON array. Each item must contain: text, kind, importance (1-5), confidence (0-1).
+
+USER:
+{user_text}'''
+        try:
+            result = await self.client.chat.completions.create(
+                model=self.model,
+                messages=[
+                    {'role': 'system', 'content': 'You are a conservative long-term memory extractor. Output valid JSON only.'},
+                    {'role': 'user', 'content': prompt}
+                ],
+                temperature=0
+            )
+            raw = (result.choices[0].message.content or '').strip()
+            if raw.startswith('```'):
+                raw = raw.split('\n', 1)[1].rsplit('```', 1)[0]
+            items = json.loads(raw)
+            if not isinstance(items, list):
+                return
+            for item in items:
+                if not isinstance(item, dict) or not item.get('text'):
+                    continue
+                importance = max(1, min(5, int(item.get('importance', 3))))
+                confidence = max(0, min(1, float(item.get('confidence', 0.8))))
+                self.memory.add_memory(str(item['text']), str(item.get('kind', 'fact'))[:40], importance, confidence)
+        except Exception:
+            pass
