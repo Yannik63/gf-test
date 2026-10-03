@@ -1,7 +1,7 @@
 import json
 import os
 from dotenv import load_dotenv
-from openai import AsyncOpenAI
+from ollama import AsyncClient
 from memory import MemoryStore
 from state import CompanionState
 
@@ -13,8 +13,8 @@ class Companion:
         self.user_name = os.getenv('USER_NAME', 'Yannik')
         self.memory = MemoryStore(os.getenv('DB_PATH', 'companion.db'))
         self.state = CompanionState()
-        self.client = AsyncOpenAI(api_key=os.getenv('LLM_API_KEY'), base_url=os.getenv('LLM_BASE_URL', 'https://api.openai.com/v1'))
-        self.model = os.getenv('LLM_MODEL', 'gpt-5.6')
+        self.client = AsyncClient(host=os.getenv('OLLAMA_HOST', 'http://127.0.0.1:11434'))
+        self.model = os.getenv('LLM_MODEL', 'qwen3.5:9b')
 
     def system_prompt(self, memories):
         memory_text = '\n'.join(f"- [{m['kind']}] {m['text']}" for m in memories) or '- none'
@@ -40,8 +40,8 @@ Current state:
         messages += [{'role': x['role'], 'content': x['content']} for x in recent]
         messages.append({'role': 'user', 'content': text})
         self.memory.add_message('user', text)
-        result = await self.client.chat.completions.create(model=self.model, messages=messages, temperature=.9)
-        answer = (result.choices[0].message.content or '').strip()
+        result = await self.client.chat(model=self.model, messages=messages, options={'temperature': .9})
+        answer = (result.message.content or '').strip()
         self.memory.add_message('assistant', answer)
         self.state.update(text)
         await self.extract_memory(text, answer)
@@ -57,15 +57,15 @@ Return ONLY a JSON array. Each item must contain: text, kind, importance (1-5), 
 USER:
 {user_text}'''
         try:
-            result = await self.client.chat.completions.create(
+            result = await self.client.chat(
                 model=self.model,
                 messages=[
                     {'role': 'system', 'content': 'You are a conservative long-term memory extractor. Output valid JSON only.'},
                     {'role': 'user', 'content': prompt}
                 ],
-                temperature=0
+                options={'temperature': 0}
             )
-            raw = (result.choices[0].message.content or '').strip()
+            raw = (result.message.content or '').strip()
             if raw.startswith('```'):
                 raw = raw.split('\n', 1)[1].rsplit('```', 1)[0]
             items = json.loads(raw)
