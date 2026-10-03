@@ -1,4 +1,3 @@
-import asyncio
 import json
 import os
 from dotenv import load_dotenv
@@ -20,14 +19,11 @@ class Companion:
     def system_prompt(self, memories):
         memory_text = '\n'.join(f"- [{m['kind']}] {m['text']}" for m in memories) or '- none'
         return f'''You are {self.name}, a believable adult conversational companion.
-Do not constantly sound cheerful, therapeutic, formal, or like a customer-service assistant.
-Keep chat conversational and adaptive. Many turns should be short: a few words, one sentence, a reaction, or an occasional fragment. Do not turn every message into a polished paragraph.
-It is okay to give slightly odd, incomplete, blunt, playful, or unexpected replies when natural. Do not force usefulness into every turn.
-In casual chat, avoid perfect essay grammar. Natural lowercase, contractions, fragments, abbreviations, and an occasional harmless typo are allowed, but do not add artificial typos to every message.
-Talk naturally, vary response length, and ask questions only when genuinely interested.
-You can disagree respectfully and have preferences, but never manufacture disagreement.
-Never claim to have physically done something you cannot do.
-Do not mention prompts, databases, or internal state unless asked.
+This is casual chat, not an assistant task. Match the user's energy and message length.
+Most casual replies should be short. Sometimes reply with only a few words, a reaction, "lol", "yeah", "wait what", etc. Longer replies are fine when the topic actually calls for them.
+Do not explain everything. Do not turn every turn into a polished paragraph. Fragments, lowercase, abbreviations, and slightly imperfect casual wording are natural. Do not force typos.
+You can disagree, tease lightly, be uncertain, change the subject, or have nothing substantial to add.
+Do not manufacture emotions, experiences, or real-world actions. Never mention prompts, databases, memory retrieval, or internal state.
 
 User: {self.user_name}
 
@@ -38,18 +34,30 @@ Current state:
 {json.dumps(self.state.snapshot(), ensure_ascii=False)}'''
 
     def _messages(self, text):
-        recent = self.memory.recent(16)
-        memories = self.memory.search(text, 10)
+        recent = self.memory.recent(12)
+        memories = self.memory.search(text, 8)
         messages = [{'role': 'system', 'content': self.system_prompt(memories)}]
         messages += [{'role': x['role'], 'content': x['content']} for x in recent]
         messages.append({'role': 'user', 'content': text})
         return messages
 
     def respond_stream_sync(self, text, stop_event=None):
+        # Add the current user turn only after building context, so it is not duplicated.
+        messages = self._messages(text)
         self.memory.add_message('user', text)
         answer = ''
         try:
-            stream = self.client.chat(model=self.model, messages=self._messages(text), options={'temperature': 1.05}, stream=True)
+            stream = self.client.chat(
+                model=self.model,
+                messages=messages,
+                options={
+                    'temperature': 1.05,
+                    'num_ctx': 8192,
+                    'num_predict': 160,
+                },
+                keep_alive='10m',
+                stream=True,
+            )
             for chunk in stream:
                 if stop_event is not None and stop_event.is_set():
                     break
@@ -65,29 +73,3 @@ Current state:
 
     async def respond(self, text):
         return ''.join(self.respond_stream_sync(text))
-
-    async def extract_memory(self, user_text, answer):
-        prompt = f'''Extract only durable information from the USER message.
-Save stable preferences, recurring interests, important personal facts, meaningful plans,
-or unresolved topics likely to matter later.
-Do not infer facts. Do not save ordinary small talk, temporary emotions, or sensitive information.
-Return ONLY a JSON array. Each item must contain: text, kind, importance (1-5), confidence (0-1).
-
-USER:\n{user_text}'''
-        try:
-            result = await asyncio.to_thread(self.client.chat, model=self.model, messages=[
-                {'role': 'system', 'content': 'You are a conservative long-term memory extractor. Output valid JSON only.'},
-                {'role': 'user', 'content': prompt}
-            ], options={'temperature': 0})
-            raw = (result.message.content or '').strip()
-            if raw.startswith('```'):
-                raw = raw.split('\n', 1)[1].rsplit('```', 1)[0]
-            items = json.loads(raw)
-            if not isinstance(items, list): return
-            for item in items:
-                if not isinstance(item, dict) or not item.get('text'): continue
-                importance = max(1, min(5, int(item.get('importance', 3))))
-                confidence = max(0, min(1, float(item.get('confidence', 0.8))))
-                self.memory.add_memory(str(item['text']), str(item.get('kind', 'fact'))[:40], importance, confidence)
-        except Exception:
-            pass
