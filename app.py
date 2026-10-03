@@ -15,6 +15,7 @@ class CompanionApp:
         self.root.minsize(560, 480)
 
         self.companion = Companion()
+        self.scheduler = ProactiveScheduler(self.companion)
         self.events = queue.Queue()
         self.generation_id = 0
         self.worker = None
@@ -260,6 +261,30 @@ class CompanionApp:
         self.chat.mark_gravity('response', tk.RIGHT)
         self.chat.configure(state='disabled')
         self.chat.see(tk.END)
+
+    def _clean_response_prefix(self, value):
+        """Strip one or more leading Mia: labels emitted by the model.
+
+        The UI already renders the speaker label. Keep this only at the very
+        start of a streamed response so a legitimate later use of "Mia:" is
+        left untouched.
+        """
+        self.response_prefix_buffer += value
+        candidate = self.response_prefix_buffer.lstrip()
+        prefix = self.companion.name + ':'
+
+        # Wait briefly if the current chunk could still be the beginning of
+        # a split speaker label (e.g. "M" + "ia: hello").
+        if len(candidate) < len(prefix) and prefix.lower().startswith(candidate.lower()):
+            return ''
+
+        # Models occasionally emit the speaker label twice. Remove all
+        # consecutive leading copies before releasing the buffered text.
+        while candidate.lower().startswith(prefix.lower()):
+            candidate = candidate[len(prefix):].lstrip()
+
+        self.response_prefix_buffer = ''
+        return candidate
 
     def append_response(self, generation_id, value):
         if generation_id != self.generation_id or not self.response_mark:
