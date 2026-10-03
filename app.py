@@ -160,8 +160,6 @@ class CompanionApp:
         )
 
     def _apply_modern(self):
-        # A restrained dark theme: cleaner without turning the app into a
-        # generic neon "AI dashboard".
         bg = '#17191d'
         panel = '#202329'
         text = '#e7e9ed'
@@ -256,7 +254,7 @@ class CompanionApp:
             return
         self.response_prefix_buffer = ''
         self.response_started = False
-        self.chat.configure(state='normal'
+        self.chat.configure(state='normal')
         self.chat.insert(tk.END, f'{self.companion.name}: ', 'mia')
         self.response_mark = self.chat.index('end-1c')
         self.chat.mark_set('response', self.response_mark)
@@ -273,9 +271,7 @@ class CompanionApp:
         candidate = self.response_prefix_buffer
         prefix = self.companion.name + ':'
 
-        # Only inspect whitespace at the very beginning of the response.
         stripped = candidate.lstrip()
-        leading_ws = candidate[:len(candidate) - len(stripped)]
 
         if len(stripped) < len(prefix) and prefix.lower().startswith(stripped.lower()):
             return ''
@@ -286,15 +282,12 @@ class CompanionApp:
 
         self.response_prefix_buffer = ''
         self.response_started = True
-        # The prefix-cleanup is finished; preserve all subsequent model spacing.
         return stripped
 
     def append_response(self, generation_id, value):
         if generation_id != self.generation_id or not self.response_mark:
             return
 
-        # The UI already writes "Mia:". Streaming may split a repeated
-        # speaker label across multiple chunks, so clean it before display.
         value = self._clean_response_prefix(value)
 
         if value:
