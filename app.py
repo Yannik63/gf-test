@@ -10,9 +10,9 @@ class CompanionApp:
         self.root.title('Companion')
         self.root.geometry('700x600')
         self.companion = Companion()
-        self.pending = []
         self.generating = False
         self.response_task = None
+        self.response_start = None
 
         self.chat = scrolledtext.ScrolledText(root, wrap=tk.WORD, state='disabled')
         self.chat.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
@@ -38,6 +38,24 @@ class CompanionApp:
         self.chat.configure(state='disabled')
         self.chat.see(tk.END)
 
+    def begin_response(self):
+        self.chat.configure(state='normal')
+        self.chat.insert(tk.END, f'{self.companion.name}: ')
+        self.response_start = self.chat.index('end-1c')
+        self.chat.insert(tk.END, '\n\n')
+        self.chat.configure(state='disabled')
+        self.chat.see(tk.END)
+
+    def replace_response(self, value):
+        if not self.response_start:
+            return
+        self.chat.configure(state='normal')
+        end = self.chat.index('end-1c')
+        self.chat.delete(self.response_start, end)
+        self.chat.insert(self.response_start, value + '\n\n')
+        self.chat.configure(state='disabled')
+        self.chat.see(tk.END)
+
     def send(self):
         text = self.entry.get().strip()
         if not text:
@@ -46,47 +64,29 @@ class CompanionApp:
         self.write('You', text)
         if self.generating and self.response_task:
             self.response_task.cancel()
-        self.pending = [text]
-        self.status.configure(text='Interrupting...')
-        self.response_task = self.loop.create_task(self.respond_next())
+        self.response_task = self.loop.create_task(self.respond(text))
 
-    async def respond_next(self):
-        if self.generating or not self.pending:
-            return
+    async def respond(self, text):
         self.generating = True
-        text = self.pending.pop(0)
+        self.root.after(0, self.begin_response)
+        buffer = ''
         try:
-            self.status.configure(text='Thinking...')
-            self.root.after(0, lambda: self.write(self.companion.name, ''))
-            buffer = ''
             async for piece in self.companion.respond_stream(text):
                 buffer += piece
-                self.root.after(0, lambda value=buffer: self.replace_last(value))
-                await asyncio.sleep(0.01)
+                self.root.after(0, lambda value=buffer: self.replace_response(value))
+                await asyncio.sleep(0.008)
         except asyncio.CancelledError:
             pass
         except Exception as exc:
-            self.root.after(0, lambda: self.write('Error', str(exc)))
+            self.root.after(0, lambda value=str(exc): self.write('Error', value))
         finally:
             self.generating = False
-            if self.pending:
-                self.loop.create_task(self.respond_next())
-            else:
-                self.root.after(0, lambda: self.status.configure(text='Ready'))
-
-    def replace_last(self, value):
-        self.chat.configure(state='normal')
-        end = self.chat.index('end-1c')
-        start = self.chat.search(self.companion.name + ': ', '1.0', backwards=True, stopindex=end)
-        if start:
-            self.chat.delete(start, end)
-            self.chat.insert(tk.END, self.companion.name + ': ' + value + '\n\n')
-        self.chat.configure(state='disabled')
-        self.chat.see(tk.END)
+            self.response_task = None
+            self.root.after(0, lambda: self.status.configure(text='Ready'))
 
     async def proactive_loop(self):
         async def emit(message):
-            self.root.after(0, lambda: self.write(self.companion.name, message))
+            self.root.after(0, lambda value=message: self.write(self.companion.name, value))
         await self.scheduler.run(lambda message: self.loop.create_task(emit(message)))
 
     def process_asyncio(self):
@@ -97,6 +97,8 @@ class CompanionApp:
 
     def close(self):
         self.scheduler.stop()
+        if self.response_task:
+            self.response_task.cancel()
         self.loop.stop()
         self.loop.close()
         self.root.destroy()
