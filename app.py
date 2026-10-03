@@ -1,4 +1,6 @@
 import asyncio
+import queue
+import threading
 import tkinter as tk
 from tkinter import scrolledtext
 from companion import Companion
@@ -10,9 +12,12 @@ class CompanionApp:
         self.root.title('Companion')
         self.root.geometry('700x600')
         self.companion = Companion()
-        self.generating = False
-        self.response_task = None
+        self.events = queue.Queue()
+        self.generation_id = 0
+        self.worker = None
+        self.stop_event = None
         self.response_start = None
+        self.generating = False
 
         self.chat = scrolledtext.ScrolledText(root, wrap=tk.WORD, state='disabled')
         self.chat.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
@@ -27,7 +32,7 @@ class CompanionApp:
 
         self.scheduler = ProactiveScheduler(self.companion, interval_seconds=60)
         self.loop = asyncio.new_event_loop()
-        self.root.after(50, self.process_asyncio)
+        self.root.after(30, self.process_events)
         self.loop.create_task(self.proactive_loop())
         self.write('System', f'{self.companion.name} is here.')
         self.entry.focus_set()
@@ -38,7 +43,8 @@ class CompanionApp:
         self.chat.configure(state='disabled')
         self.chat.see(tk.END)
 
-    def begin_response(self):
+    def begin_response(self, generation_id):
+        if generation_id != self.generation_id: return
         self.chat.configure(state='normal')
         self.chat.insert(tk.END, f'{self.companion.name}: ')
         self.response_start = self.chat.index('end-1c')
@@ -46,9 +52,8 @@ class CompanionApp:
         self.chat.configure(state='disabled')
         self.chat.see(tk.END)
 
-    def replace_response(self, value):
-        if not self.response_start:
-            return
+    def replace_response(self, generation_id, value):
+        if generation_id != self.generation_id or not self.response_start: return
         self.chat.configure(state='normal')
         end = self.chat.index('end-1c')
         self.chat.delete(self.response_start, end)
@@ -58,31 +63,50 @@ class CompanionApp:
 
     def send(self):
         text = self.entry.get().strip()
-        if not text:
-            return
+        if not text: return
         self.entry.delete(0, tk.END)
+        if self.generating and self.stop_event:
+            self.stop_event.set()
+        self.generation_id += 1
+        generation_id = self.generation_id
         self.write('You', text)
-        if self.generating and self.response_task:
-            self.response_task.cancel()
-        self.response_task = self.loop.create_task(self.respond(text))
-
-    async def respond(self, text):
         self.generating = True
-        self.root.after(0, self.begin_response)
-        buffer = ''
+        self.status.configure(text='Typing...')
+        self.response_start = None
+        self.stop_event = threading.Event()
+        self.worker = threading.Thread(target=self.generate, args=(generation_id, text, self.stop_event), daemon=True)
+        self.worker.start()
+
+    def generate(self, generation_id, text, stop_event):
         try:
-            async for piece in self.companion.respond_stream(text):
-                buffer += piece
-                self.root.after(0, lambda value=buffer: self.replace_response(value))
-                await asyncio.sleep(0.008)
-        except asyncio.CancelledError:
-            pass
+            self.events.put(('begin', generation_id, None))
+            for piece in self.companion.respond_stream_sync(text, stop_event):
+                self.events.put(('piece', generation_id, piece))
+            self.events.put(('done', generation_id, None))
         except Exception as exc:
-            self.root.after(0, lambda value=str(exc): self.write('Error', value))
-        finally:
-            self.generating = False
-            self.response_task = None
-            self.root.after(0, lambda: self.status.configure(text='Ready'))
+            self.events.put(('error', generation_id, str(exc)))
+
+    def process_events(self):
+        try:
+            while True:
+                kind, generation_id, value = self.events.get_nowait()
+                if generation_id != self.generation_id:
+                    continue
+                if kind == 'begin':
+                    self.begin_response(generation_id)
+                elif kind == 'piece':
+                    current = self.chat.get(self.response_start, 'end-1c') if self.response_start else ''
+                    self.replace_response(generation_id, current + value)
+                elif kind == 'error':
+                    self.write('Error', value)
+                    self.generating = False
+                    self.status.configure(text='Ready')
+                elif kind == 'done':
+                    self.generating = False
+                    self.status.configure(text='Ready')
+        except queue.Empty:
+            pass
+        self.root.after(30, self.process_events)
 
     async def proactive_loop(self):
         async def emit(message):
@@ -97,10 +121,7 @@ class CompanionApp:
 
     def close(self):
         self.scheduler.stop()
-        if self.response_task:
-            self.response_task.cancel()
-        self.loop.stop()
-        self.loop.close()
+        if self.stop_event: self.stop_event.set()
         self.root.destroy()
 
 if __name__ == '__main__':
