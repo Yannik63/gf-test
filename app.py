@@ -1,6 +1,5 @@
 import asyncio
 import tkinter as tk
-import random
 from tkinter import scrolledtext
 from companion import Companion
 from scheduler import ProactiveScheduler
@@ -11,24 +10,24 @@ class CompanionApp:
         self.root.title('Companion')
         self.root.geometry('700x600')
         self.companion = Companion()
+        self.pending = []
+        self.generating = False
 
         self.chat = scrolledtext.ScrolledText(root, wrap=tk.WORD, state='disabled')
         self.chat.pack(fill=tk.BOTH, expand=True, padx=10, pady=(10, 5))
-
         bottom = tk.Frame(root)
         bottom.pack(fill=tk.X, padx=10, pady=10)
         self.entry = tk.Entry(bottom)
         self.entry.pack(side=tk.LEFT, fill=tk.X, expand=True)
         self.entry.bind('<Return>', lambda event: self.send())
+        tk.Button(bottom, text='Send', command=self.send).pack(side=tk.RIGHT, padx=(8, 0))
         self.status = tk.Label(root, text='Ready', anchor='w')
         self.status.pack(fill=tk.X, padx=10)
-        tk.Button(bottom, text='Send', command=self.send).pack(side=tk.RIGHT, padx=(8, 0))
 
         self.scheduler = ProactiveScheduler(self.companion, interval_seconds=60)
         self.loop = asyncio.new_event_loop()
         self.root.after(50, self.process_asyncio)
         self.loop.create_task(self.proactive_loop())
-
         self.write('System', f'{self.companion.name} is here.')
         self.entry.focus_set()
 
@@ -44,25 +43,28 @@ class CompanionApp:
             return
         self.entry.delete(0, tk.END)
         self.write('You', text)
-        self.entry.configure(state='disabled')
-        self.status.configure(text='Thinking...')
-        self.loop.create_task(self.respond(text))
+        self.pending.append(text)
+        self.status.configure(text='Thinking...' if self.generating else 'Queued')
+        if not self.generating:
+            self.loop.create_task(self.respond_next())
 
-    async def respond(self, text):
+    async def respond_next(self):
+        if self.generating or not self.pending:
+            return
+        self.generating = True
+        text = self.pending.pop(0)
         try:
-            await asyncio.sleep(random.uniform(0.25, 0.9))
+            self.status.configure(text='Thinking...')
             answer = await self.companion.respond(text)
-            delay = min(2.5, max(0.15, len(answer) / 70))
-            await asyncio.sleep(delay)
-            self.root.after(0, lambda: self.finish_response(answer))
+            self.root.after(0, lambda: self.write(self.companion.name, answer))
         except Exception as exc:
-            self.root.after(0, lambda: self.finish_response('Error: ' + str(exc), error=True))
-
-    def finish_response(self, answer, error=False):
-        self.write(self.companion.name if not error else 'Error', answer)
-        self.entry.configure(state='normal')
-        self.status.configure(text='Ready')
-        self.entry.focus_set()
+            self.root.after(0, lambda: self.write('Error', str(exc)))
+        finally:
+            self.generating = False
+            if self.pending:
+                self.loop.create_task(self.respond_next())
+            else:
+                self.root.after(0, lambda: self.status.configure(text='Ready'))
 
     async def proactive_loop(self):
         async def emit(message):
