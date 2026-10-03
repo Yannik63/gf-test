@@ -260,10 +260,21 @@ class CompanionApp:
     def append_response(self, generation_id, value):
         if generation_id != self.generation_id or not self.response_mark:
             return
-        self.chat.configure(state='normal')
-        self.chat.insert('response', value, 'mia')
-        self.chat.configure(state='disabled')
-        self.chat.see(tk.END)
+
+        # The UI already writes "Mia:". Qwen occasionally repeats the speaker
+        # label itself, so remove only a leading standalone label.
+        if self.response_mark == self.chat.index('end-1c'):
+            cleaned = value.lstrip()
+            if cleaned.lower().startswith('mia:'):
+                value = cleaned[4:].lstrip()
+            elif cleaned.lower().startswith(self.companion.name.lower() + ':'):
+                value = cleaned[len(self.companion.name) + 1:].lstrip()
+
+        if value:
+            self.chat.configure(state='normal')
+            self.chat.insert('response', value, 'mia')
+            self.chat.configure(state='disabled')
+            self.chat.see(tk.END)
 
     def finish_response(self, generation_id):
         if generation_id != self.generation_id:
@@ -340,14 +351,28 @@ class CompanionApp:
             font=('Segoe UI' if self.mode == 'modern' else 'TkDefaultFont', 9)
         ).pack(anchor='w', padx=22)
 
-        ttk_font = ttk.Combobox(
+        font_menu = tk.OptionMenu(
             window,
-            values=[9, 10, 11, 12, 13, 14],
-            textvariable=font_var,
-            state='readonly',
-            width=8
+            font_var,
+            9, 10, 11, 12, 13, 14
         )
-        ttk_font.pack(anchor='w', padx=22, pady=(5, 18))
+        font_menu.configure(
+            bg=panel,
+            fg=fg,
+            activebackground=panel,
+            activeforeground=fg,
+            highlightthickness=0,
+            relief=tk.GROOVE,
+            bd=1,
+            font=('Segoe UI' if self.mode == 'modern' else 'TkDefaultFont', 9)
+        )
+        font_menu['menu'].configure(
+            bg=panel,
+            fg=fg,
+            activebackground='#3b4c68' if self.mode == 'modern' else '#cce8ff',
+            activeforeground=fg
+        )
+        font_menu.pack(anchor='w', padx=22, pady=(5, 18))
 
         def save():
             self.mode = mode_var.get()
@@ -357,12 +382,39 @@ class CompanionApp:
             self.apply_theme()
             window.destroy()
 
-        ttk.Button(window, text='Apply', command=save).pack(
-            side=tk.RIGHT, padx=(0, 22), pady=(0, 18)
-        )
-        ttk.Button(window, text='Cancel', command=window.destroy).pack(
-            side=tk.RIGHT, padx=8, pady=(0, 18)
-        )
+        button_font = ('Segoe UI', 9) if self.mode == 'modern' else ('TkDefaultFont', 9)
+        button_bg = '#2a2e35' if self.mode == 'modern' else '#e6e6e6'
+        button_active = '#363b44' if self.mode == 'modern' else '#d4d4d4'
+
+        tk.Button(
+            window,
+            text='Apply',
+            command=save,
+            bg=button_bg,
+            fg=fg,
+            activebackground=button_active,
+            activeforeground=fg,
+            relief=tk.GROOVE,
+            bd=1,
+            padx=12,
+            pady=4,
+            font=button_font
+        ).pack(side=tk.RIGHT, padx=(0, 22), pady=(0, 18))
+
+        tk.Button(
+            window,
+            text='Cancel',
+            command=window.destroy,
+            bg=button_bg,
+            fg=fg,
+            activebackground=button_active,
+            activeforeground=fg,
+            relief=tk.GROOVE,
+            bd=1,
+            padx=12,
+            pady=4,
+            font=button_font
+        ).pack(side=tk.RIGHT, padx=8, pady=(0, 18))
 
     # ---------- Conversation ----------
 
