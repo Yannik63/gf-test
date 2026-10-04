@@ -7,7 +7,7 @@ Local-first conversational companion core. This first version deliberately has n
 - Persistent long-term memory
 - Relevant-memory retrieval
 - Lightweight dynamic state
-- Configurable OpenAI-compatible API
+- local inference
 - Terminal interface
 
 ## Setup
